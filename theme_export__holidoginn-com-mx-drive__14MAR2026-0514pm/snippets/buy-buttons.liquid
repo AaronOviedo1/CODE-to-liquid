@@ -1,0 +1,443 @@
+{% comment %}
+  Renders product buy-buttons.
+  Accepts:
+  - product: {Object} product object.
+  - block: {Object} passing the block information.
+  - product_form_id: {String} product form id.
+  - section_id: {String} id of section to which this snippet belongs.
+  - show_pickup_availability: {Boolean} for the pickup availability. If true the pickup availability is rendered, false - not rendered (optional).
+
+  Usage:
+  {% render 'buy-buttons', block: block, product: product, product_form_id: product_form_id, section_id: section.id, show_pickup_availability: true %}
+{% endcomment %}
+<div {{ block.shopify_attributes }}>
+  {%- if product != blank -%}
+    {%- liquid
+      assign gift_card_recipient_feature_active = false
+      if block.settings.show_gift_card_recipient and product.gift_card?
+        assign gift_card_recipient_feature_active = true
+      endif
+
+      assign show_dynamic_checkout = false
+      if block.settings.show_dynamic_checkout and gift_card_recipient_feature_active == false
+        assign show_dynamic_checkout = true
+      endif
+    -%}
+
+    <product-form
+      class="product-form"
+      data-hide-errors="{{ gift_card_recipient_feature_active }}"
+      data-section-id="{{ section.id }}"
+    >
+      <div class="product-form__error-message-wrapper" role="alert" hidden>
+        <span class="svg-wrapper">
+          {{- 'icon-error.svg' | inline_asset_content -}}
+        </span>
+        <span class="product-form__error-message"></span>
+      </div>
+
+      {%- form 'product',
+        product,
+        id: product_form_id,
+        class: 'form',
+        novalidate: 'novalidate',
+        data-type: 'add-to-cart-form'
+      -%}
+        <input
+          type="hidden"
+          name="id"
+          value="{{ product.selected_or_first_available_variant.id }}"
+          {% if product.selected_or_first_available_variant.available == false
+            or quantity_rule_soldout
+            or product.selected_or_first_available_variant == null
+          %}
+            disabled
+          {% endif %}
+          class="product-variant-id"
+        >
+
+        {%- if gift_card_recipient_feature_active -%}
+          {%- render 'gift-card-recipient-form', product: product, form: form, section: section -%}
+        {%- endif -%}
+
+        <div class="product-form__buttons">
+          {%- liquid
+            assign check_against_inventory = true
+            if product.selected_or_first_available_variant.inventory_management != 'shopify' or product.selected_or_first_available_variant.inventory_policy == 'continue'
+              assign check_against_inventory = false
+            endif
+            if product.selected_or_first_available_variant.quantity_rule.min > product.selected_or_first_available_variant.inventory_quantity and check_against_inventory
+              assign quantity_rule_soldout = true
+            endif
+          -%}
+
+
+          {%- liquid
+            assign combine_bookx_whatsapp = false
+            if product.tags contains 'bookx-wa'
+              assign combine_bookx_whatsapp = true
+            endif
+          -%}
+
+
+          {%- liquid
+            assign use_whatsapp = false
+            if product.tags contains 'whatsapp-only'
+              assign use_whatsapp = true
+            endif
+          -%}
+
+          {%- assign phone_e164 = '5216622057580' -%} 
+        {%- if use_whatsapp -%}
+          <a id="whatsappButton-{{ section_id }}"
+            class="product-form__submit button button--full-width {% if show_dynamic_checkout %}button--secondary{% else %}button--primary{% endif %}"
+            target="_blank" rel="noopener">
+            Preguntar por WhatsApp
+          </a>
+
+          <!-- Botón submit fantasma para que el JS del tema no falle -->
+          <button
+            type="submit"
+            name="add"
+            class="product-form__submit"
+            hidden
+            aria-hidden="true"
+            tabindex="-1"
+            style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden;"
+          ></button>
+
+          <script>
+          (function () {
+            var btn = document.getElementById('whatsappButton-{{ section_id }}');
+            if (!btn) return;
+            var phone = '{{ phone_e164 }}';
+
+            // Mapas desde Liquid
+            var VARIANT_TEXT_BY_ID = {
+              {% for v in product.variants %}
+                "{{ v.id }}": {{ v.title | json }},
+              {% endfor %}
+            };
+            var VARIANT_PRICE_CENTS = {
+              {% for v in product.variants %}
+                "{{ v.id }}": {{ v.price | default: 0 }},
+              {% endfor %}
+            };
+
+            var moneyFormat = {{ shop.money_with_currency_format | json }};
+            var shopCurrency = {{ shop.currency | json }};
+            function formatCents(c){
+              if (window.Shopify && Shopify.formatMoney) return Shopify.formatMoney(c, moneyFormat);
+              try { return new Intl.NumberFormat('es-MX',{style:'currency',currency:shopCurrency}).format((c||0)/100); }
+              catch(e){ return '$'+((c||0)/100).toFixed(2)+' '+shopCurrency; }
+            }
+
+            var variantInput = document.querySelector('.product-variant-id') || document.querySelector('input[name="id"]');
+            var qtyInput     = document.querySelector('input[name="quantity"]') || document.querySelector('.js-qty__num');
+
+            function norm(s){ return (s||'').trim().toLowerCase(); }
+            function readOptionByName(optionName){
+              var name = norm(optionName);
+              var sel = document.querySelector('select[name="options['+optionName+']"]');
+              if(!sel){
+                sel = Array.from(document.querySelectorAll('select[name^="options["]'))
+                  .find(s=>norm(s.name.replace(/^options\[|\]$/g,''))===name);
+              }
+              if(sel) return sel.value;
+
+              var fs = Array.from(document.querySelectorAll('fieldset[data-option-index], fieldset'))
+                .find(f=>norm(f.querySelector('legend')?.innerText)===name);
+              if(fs){
+                var checked = fs.querySelector('input[type="radio"]:checked, input[type="radio"][aria-checked="true"]');
+                if(checked) return checked.dataset.value || checked.value;
+                var pressed = fs.querySelector('[aria-pressed="true"], .is-selected, .selected');
+                if(pressed) return pressed.getAttribute('data-value') || pressed.textContent.trim();
+              }
+              return '';
+            }
+
+            function getTipoMascota(){ 
+              return readOptionByName('Tamaño de perro') || readOptionByName('Tipo de mascota') || ''; 
+            }
+
+            // Sí/No -> boolean
+            function yn(val){
+              var n = norm(val);
+              if (!n) return false;
+              if (['si','sí','con','yes','y','true','1','incluye','incluido'].includes(n)) return true;
+              if (['no','sin','false','0'].includes(n)) return false;
+              // Si el valor ya es el nombre (p.ej. "Corte"), trátalo como true
+              return !!n;
+            }
+
+            function getCorte(){      return yn(readOptionByName('Corte')); }
+            function getDeslanado(){  return yn(readOptionByName('Deslanado')); }
+
+            function getVariantId(){ return variantInput && variantInput.value ? variantInput.value : ''; }
+
+            function buildUrl(){
+              var qty   = (qtyInput && qtyInput.value) ? qtyInput.value : '1';
+              var title = {{ product.title | json }};
+              var tipo  = getTipoMascota();
+              var variantId = getVariantId();
+              var cents = VARIANT_PRICE_CENTS[variantId] ?? {{ product.selected_or_first_available_variant.price | default: 0 }};
+              var precio = formatCents(cents);
+
+              // Extras dinámicos: "con corte y deslanado"
+              var extras = [];
+              if (getCorte()) extras.push('corte');
+              if (getDeslanado()) extras.push('deslanado');
+              var extrasTxt = extras.length ? (' con ' + extras.join(' y ')) : '';
+
+              var tipoTxt = tipo ? (' para un ' + tipo) : '';
+
+              // Mensaje SIN link final
+              var msg = 'Hola, me interesa ' + qty + ' ' + title + tipoTxt + extrasTxt +
+                        ', vi en su página web que el costo es de ' + (precio || 'N/A') + '.';
+
+              btn.href = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+            }
+
+            buildUrl();
+            document.addEventListener('change', function(e){
+              if(e.target.matches('input[name="id"], select[name^="options"], input[name="quantity"], .js-qty__num')) buildUrl();
+            });
+            document.addEventListener('click', function(e){
+              if(e.target.matches('.js-qty__adjust, [name^="plus"], [name^="minus"]') || e.target.closest('.quantity')) {
+                setTimeout(buildUrl,0);
+              }
+            });
+          })();
+          </script>
+
+                {%- else -%}
+        {%- if product.handle == 'reserva-de-hotel' -%}
+          HEYY! recuerda leer los terminos y condiciones antes hacer tu reserva🐶
+        {%- endif -%}
+        {%- liquid
+          assign check_against_inventory = true
+          if product.selected_or_first_available_variant.inventory_management != 'shopify' or product.selected_or_first_available_variant.inventory_policy == 'continue'
+            assign check_against_inventory = false
+          endif
+          if product.selected_or_first_available_variant.quantity_rule.min > product.selected_or_first_available_variant.inventory_quantity and check_against_inventory
+            assign quantity_rule_soldout = true
+          endif
+        -%}
+          <button
+            id="ProductSubmitButton-{{ section_id }}"
+            type="submit"
+            name="add"
+            class="product-form__submit button button--full-width {% if show_dynamic_checkout %}button--secondary{% else %}button--primary{% endif %}"
+            {% if product.selected_or_first_available_variant.available == false or quantity_rule_soldout or product.selected_or_first_available_variant == null %}disabled{% endif %}
+          >
+            <span>
+              {%- if product.selected_or_first_available_variant == null -%}
+                {{ 'products.product.unavailable' | t }}
+              {%- elsif product.selected_or_first_available_variant.available == false or quantity_rule_soldout -%}
+                {{ 'products.product.sold_out' | t }}
+              {%- else -%}
+                {%- if combine_bookx_whatsapp -%}
+                  Agendar por WhatsApp
+                {%- else -%}
+                  {{ 'products.product.add_to_cart' | t }}
+                {%- endif -%}
+              {%- endif -%}
+            </span>
+            
+            {%- if combine_bookx_whatsapp -%}
+            {%- assign phone_e164 = '5216622057580' -%}
+            <script>
+            (function(){
+              var addBtn = document.getElementById('ProductSubmitButton-{{ section_id }}');
+              if(!addBtn) return;
+
+              var phone = '{{ phone_e164 }}';
+              var form  = addBtn.closest('form');
+
+              // Mapas exactos desde Liquid
+              var VARIANT_PRICE_CENTS = {
+                {% for v in product.variants %}"{{ v.id }}": {{ v.price | default: 0 }},{% endfor %}
+              };
+              var VARIANT_TEXT_BY_ID = {
+                {% for v in product.variants %}"{{ v.id }}": {{ v.title | json }},{% endfor %}
+              };
+
+              var moneyFormat = {{ shop.money_with_currency_format | json }};
+              var shopCurrency = {{ shop.currency | json }};
+              function formatCents(c){
+                if (window.Shopify && Shopify.formatMoney) return Shopify.formatMoney(c, moneyFormat);
+                try { return new Intl.NumberFormat('es-MX',{style:'currency',currency:shopCurrency}).format((c||0)/100); }
+                catch(e){ return '$'+((c||0)/100).toFixed(2)+' '+shopCurrency; }
+              }
+
+              var variantInput = form.querySelector('.product-variant-id') || form.querySelector('input[name="id"]');
+              var qtyInput     = form.querySelector('input[name="quantity"]') || form.querySelector('.js-qty__num');
+
+              // ------- utils -------
+              function normKey(s){
+                return (s||'').toString().toLowerCase()
+                  .replace(/^\s*\d+[\).\s-]*/,'') // "1. Nombre ..." -> "Nombre ..."
+                  .replace(/[*:：]+/g,'')          // quita asteriscos/:
+                  .replace(/[\s_\-\/]+/g,' ')
+                  .trim();
+              }
+              function gatherPropsMap(){
+                var map = {};
+                form.querySelectorAll('input[name^="properties["], textarea[name^="properties["], select[name^="properties["]')
+                  .forEach(function(el){
+                    var val = (el.value || '').trim();
+                    if(!val) return;
+                    var m = el.name.match(/^properties\[(.+?)\]/);
+                    var label = m ? m[1] : el.name;
+                    map[normKey(label)] = { label: label, value: val };
+                  });
+                return map;
+              }
+              function pick(map, keys){
+                for (var i=0;i<keys.length;i++){
+                  var k = normKey(keys[i]);
+                  if (map[k]) return map[k].value;
+                }
+                return '';
+              }
+              function getVariantId(){ return variantInput?.value || ''; }
+              function getTipoPerro(){ return VARIANT_TEXT_BY_ID[getVariantId()] || ''; }
+
+              function getCustomerName(props){
+                {% if customer %} return {{ customer.name | json }}; {% endif %}
+                var v = pick(props, ['nombre completo','nombre del usuario','nombre','full name','customer name','contact name','client name']);
+                if (v) return v;
+                // fallback: leer del modal si aún no está en properties
+                var modal = document.querySelector('.bookeasy-modal, .bookx-modal, .booking-modal, [class*="modal"]');
+                if (modal){
+                  var inp = modal.querySelector('input[name*="name" i], input[placeholder*="nombre" i], input[aria-label*="nombre" i]');
+                  if (inp && inp.value) return inp.value.trim();
+                }
+                return '';
+              }
+
+              // NUEVO: cantidad desde properties de BookX
+              function getQtyFromProps(props){
+                // 1) Propiedad explícita de BookX
+                var q1 = pick(props, ['bookeasy product quantity','product quantity','quantity','qty']);
+                var qn = parseInt(q1, 10);
+                if (!isNaN(qn) && qn > 0) return qn;
+
+                // 2) Duración: "2 days", "3 noches", etc.
+                var dur = pick(props, ['booking duration','duration']);
+                var md = dur && dur.match(/\d+/);
+                if (md) {
+                  qn = parseInt(md[0], 10);
+                  if (!isNaN(qn) && qn > 0) return qn;
+                }
+
+                // 3) Fechas: contar días por ocurrencias de Mon..Sun
+                var fechas = pick(props, ['date','booking date','fechas','fecha','dates']) || '';
+                var m = fechas.match(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/gi);
+                if (m && m.length) return m.length;
+
+                // 4) Fallback: algunos formatos separan por comas
+                var parts = fechas.split(/,+/).map(s => s.trim()).filter(Boolean);
+                if (parts.length >= 2) return Math.max(1, Math.floor(parts.length / 2));
+
+                // 5) Último recurso: input de cantidad
+                var raw = qtyInput?.value || '1';
+                qn = parseInt(raw, 10);
+                return (!isNaN(qn) && qn > 0) ? qn : 1;
+              }
+
+              // REEMPLAZA tu buildMessage por esta
+              function buildMessage(){
+                var title = {{ product.title | json }};
+                var tipo  = getTipoPerro(); // del título de la variante
+                var variantId  = getVariantId();
+                var unitCents  = VARIANT_PRICE_CENTS[variantId] ?? {{ product.selected_or_first_available_variant.price | default: 0 }};
+
+                var props  = gatherPropsMap();
+                var qtyNum = getQtyFromProps(props);            // <-- cantidad real (días)
+                var totalCents = (unitCents || 0) * qtyNum;
+                var totalFmt   = formatCents(totalCents);
+
+                var fechas = pick(props, ['date','booking date','fechas','fecha','dates']) || '';
+
+                // Mensaje final (sin nombre, con 👋)
+                var msg = 'Hola👋 me interesa ' + qtyNum + ' ' + title +
+                          (tipo ? ' para un ' + tipo : '') +
+                          ', en las siguientes fechas:  - Date: ' + (fechas || '(pendientes)') +
+                          ', vi en su página web que el costo es de ' + (totalFmt || 'N/A') + '.';
+
+                return 'https://wa.me/' + phone + '?text=' + encodeURIComponent(msg);
+              }
+              // Espera a que BookX inyecte properties en el submit y luego abre WhatsApp
+              form.addEventListener('submit', function(){
+                setTimeout(function(){
+                  try { window.open(buildMessage(), '_blank', 'noopener'); }
+                  catch(e){ console.warn('WA error:', e); }
+                }, 600); // sube a 800ms si tu modal es más lento
+              });
+            })();
+            </script>
+            {%- endif -%}
+
+
+
+            {%- render 'loading-spinner' -%}
+          </button>
+          {%- if show_dynamic_checkout -%}
+            {{ form | payment_button }}
+          {%- endif -%}
+          
+        {%- endif -%}
+                </div>
+              {%- endform -%}
+            </product-form>
+          {%- else -%}
+            <div class="product-form">
+              <div class="product-form__buttons form">
+                <button
+                  type="submit"
+                  name="add"
+                  class="product-form__submit button button--full-width button--primary"
+                  disabled
+                >
+                  {{ 'products.product.sold_out' | t }}
+                </button>
+              </div>
+            </div>
+          {%- endif -%}
+
+  {%- if show_pickup_availability -%}
+    {{ 'component-pickup-availability.css' | asset_url | stylesheet_tag }}
+
+    {%- assign pick_up_availabilities = product.selected_or_first_available_variant.store_availabilities
+      | where: 'pick_up_enabled', true
+    -%}
+
+    <pickup-availability
+      class="product__pickup-availabilities quick-add-hidden"
+      {% if product.selected_or_first_available_variant.available and pick_up_availabilities.size > 0 %}
+        available
+      {% endif %}
+      data-root-url="{{ routes.root_url }}"
+      data-variant-id="{{ product.selected_or_first_available_variant.id }}"
+      data-has-only-default-variant="{{ product.has_only_default_variant }}"
+      data-product-page-color-scheme="gradient color-{{ section.settings.color_scheme }}"
+    >
+      <template>
+        <pickup-availability-preview class="pickup-availability-preview">
+          <span class="svg-wrapper">
+            {{- 'icon-unavailable.svg' | inline_asset_content -}}
+          </span>
+          <div class="pickup-availability-info">
+            <p class="caption-large">{{ 'products.product.pickup_availability.unavailable' | t }}</p>
+            <button class="pickup-availability-button link link--text underlined-link">
+              {{ 'products.product.pickup_availability.refresh' | t }}
+            </button>
+          </div>
+        </pickup-availability-preview>
+      </template>
+    </pickup-availability>
+
+    <script src="{{ 'pickup-availability.js' | asset_url }}" defer="defer"></script>
+  {%- endif -%}
+</div>
